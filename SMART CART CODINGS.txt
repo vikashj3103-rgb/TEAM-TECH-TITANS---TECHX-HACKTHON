@@ -1,0 +1,459 @@
+#include "BluetoothSerial.h"
+
+BluetoothSerial SerialBT;
+
+// L298N Motor A
+#define ENA 25
+#define IN1 26
+#define IN2 27
+
+// L298N Motor B
+#define ENB 32
+#define IN3 16
+#define IN4 17
+
+// Front ultrasonic sensor
+#define FRONT_TRIG 5
+#define FRONT_ECHO 18
+
+// Left ultrasonic sensor
+#define LEFT_TRIG 19
+#define LEFT_ECHO 23
+
+// Right ultrasonic sensor
+#define RIGHT_TRIG 13
+#define RIGHT_ECHO 14
+
+// Obstacle thresholds in centimeters
+const int FRONT_LIMIT = 30;
+const int LEFT_LIMIT = 20;
+const int RIGHT_LIMIT = 20;
+
+// Low motor speed settings
+const int START_SPEED = 90;
+const int MAX_SPEED = 130;
+
+const unsigned long COMMAND_TIMEOUT = 1000;
+
+char currentCommand = 'S';
+int motorSpeed = START_SPEED;
+unsigned long lastCommandTime = 0;
+
+// Read distance from HC-SR04
+long getDistance(int trigPin, int echoPin) {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(3);
+
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  unsigned long duration = pulseIn(echoPin, HIGH, 25000);
+
+  if (duration == 0) {
+    return -1;
+  }
+
+  return duration * 0.0343 / 2;
+}
+
+// Stop both motors
+void stopMotors() {
+  analogWrite(ENA, 0);
+  analogWrite(ENB, 0);
+
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+}
+
+// Move forward
+void moveForward(int speedValue) {
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+
+  analogWrite(ENA, speedValue);
+  analogWrite(ENB, speedValue);
+}
+
+// Move backward
+void moveBackward(int speedValue) {
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, HIGH);
+
+  analogWrite(ENA, speedValue);
+  analogWrite(ENB, speedValue);
+}
+
+// Turn left using motor B
+void turnLeft(int speedValue) {
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+
+  analogWrite(ENA, 0);
+  analogWrite(ENB, speedValue);
+}
+
+// Turn right using motor A
+void turnRight(int speedValue) {
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+
+  analogWrite(ENA, speedValue);
+  analogWrite(ENB, 0);
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(ENA, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+
+  pinMode(ENB, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+
+  pinMode(FRONT_TRIG, OUTPUT);
+  pinMode(FRONT_ECHO, INPUT);
+
+  pinMode(LEFT_TRIG, OUTPUT);
+  pinMode(LEFT_ECHO, INPUT);
+
+  pinMode(RIGHT_TRIG, OUTPUT);
+  pinMode(RIGHT_ECHO, INPUT);
+
+  digitalWrite(FRONT_TRIG, LOW);
+  digitalWrite(LEFT_TRIG, LOW);
+  digitalWrite(RIGHT_TRIG, LOW);
+
+  stopMotors();
+
+  SerialBT.begin("FollowCar");
+  SerialBT.setTimeout(50);
+
+  Serial.println("FollowCar ready");
+  Serial.println("Front limit: 30 cm");
+  Serial.println("Left limit: 20 cm");
+  Serial.println("Right limit: 20 cm");
+}
+
+void loop() {
+  // Read Bluetooth commands: F,90 / B,90 / L,90 / R,90 / S,0
+  while (SerialBT.available()) {
+    String command = SerialBT.readStringUntil('\n');
+    command.trim();
+
+    if (command.length() == 0) {
+      continue;
+    }
+
+    char action = toupper(command.charAt(0));
+    int comma = command.indexOf(',');
+    int requestedSpeed = START_SPEED;
+
+    if (comma >= 0) {
+      requestedSpeed = command.substring(comma + 1).toInt();
+    }
+
+    if (action == 'S') {
+      currentCommand = 'S';
+      motorSpeed = 0;
+    } else if (action == 'F' || action == 'B' ||
+               action == 'L' || action == 'R') {
+      currentCommand = action;
+      motorSpeed = constrain(requestedSpeed, 0, MAX_SPEED);
+    } else {
+      continue;
+    }
+
+    lastCommandTime = millis();
+
+    Serial.print("Command: ");
+    Serial.print(currentCommand);
+    Serial.print(" Speed: ");
+    Serial.println(motorSpeed);
+  }
+
+  // Stop if Bluetooth commands stop arriving
+  if (millis() - lastCommandTime > COMMAND_TIMEOUT) {
+    currentCommand = 'S';
+  }
+
+  // Read sensors separately to reduce cross-talk
+  long front = getDistance(FRONT_TRIG, FRONT_ECHO);
+  delay(30);
+
+  long left = getDistance(LEFT_TRIG, LEFT_ECHO);
+  delay(30);
+
+  long right = getDistance(RIGHT_TRIG, RIGHT_ECHO);
+  delay(30);
+
+  // Print readings to Serial Monitor
+  Serial.print("Front: ");
+  Serial.print(front);
+  Serial.print(" cm | Left: ");
+  Serial.print(left);
+  Serial.print(" cm | Right: ");
+  Serial.print(right);
+  Serial.print(" cm | Command: ");
+  Serial.println(currentCommand);
+
+  bool obstacle = false;
+
+  // Fail-safe: stop if the sensor in the direction
+  // of movement is invalid or detects an obstacle.
+  if (currentCommand == 'F' &&
+      (front < 0 || front <= FRONT_LIMIT)) {
+    obstacle = true;
+  }
+
+  if (currentCommand == 'B' &&
+      (front < 0 || front <= FRONT_LIMIT)) {
+    // Front sensor cannot verify the rear.
+    // Stop rather than reverse blindly.
+    obstacle = true;
+  }
+
+  if (currentCommand == 'L' &&
+      (left < 0 || left <= LEFT_LIMIT)) {
+    obstacle = true;
+  }
+
+  if (currentCommand == 'R' &&
+      (right < 0 || right <= RIGHT_LIMIT)) {
+    obstacle = true;
+  }
+
+  if (obstacle) {
+    stopMotors();
+    Serial.println("STOP: obstacle or sensor error");
+    delay(30);
+    return;
+  }
+
+  // Motor control
+  switch (currentCommand) {
+    case 'F':
+      moveForward(motorSpeed);
+      break;
+
+    case 'B':
+      moveBackward(motorSpeed);
+      break;
+
+    case 'L':
+      turnLeft(motorSpeed);
+      break;
+
+    case 'R':
+      turnRight(motorSpeed);
+      break;
+
+    default:
+      stopMotors();
+      break;
+  }
+
+  delay(20);
+}
+/*
+  Smart Cart - RFID-only firmware (no load cell)
+  Two MFRC522 readers -> WiFi -> MQTT -> server -> phone + tablet web pages
+
+  Publishes:
+    cart/<CART_ID>/rfid_scan    {"tagId":"04A1E649BC2A81","data":"SC|Amul Milk|60|1050|2026-10-20"}   (ADD reader)
+    cart/<CART_ID>/rfid_remove  {"tagId":"04A1E649BC2A81"}                                           (REMOVE reader)
+  "data" is the product text written on the sticker with tag_writer.ino (NTAG stickers only).
+
+  Libraries (Arduino IDE > Library Manager):
+    - MFRC522 (by GithubCommunity)
+    - PubSubClient (by Nick O'Leary)
+  Board: "ESP32 Dev Module"
+
+  Built-in LED: ON = connected to the server, short blink = sticker read.
+*/
+#include <WiFi.h>
+#include <PubSubClient.h>
+#include <SPI.h>
+#include <MFRC522.h>
+
+// ================= EDIT THESE =================
+const char*    WIFI_SSID = "rohith";      // must be 2.4 GHz
+const char*    WIFI_PASS = "********";
+const char*    MQTT_HOST = "lap ip";         // your laptop IP (run ipconfig)
+const uint16_t MQTT_PORT = 1883;
+const char*    CART_ID   = "CART01";
+// ==============================================
+
+// Pins
+#define RFID1_SS_PIN   5    // ADD reader
+#define RFID1_RST_PIN  22
+#define RFID2_SS_PIN   21   // REMOVE reader
+#define RFID2_RST_PIN  27
+#define LED_PIN        2
+// Shared by both readers: SCK = GPIO 18, MOSI = GPIO 23, MISO = GPIO 19
+
+const unsigned long UID_COOLDOWN_MS = 3000;  // ignore the same sticker read again on the same reader within this time
+
+MFRC522 rfid1(RFID1_SS_PIN, RFID1_RST_PIN);  // ADD reader
+MFRC522 rfid2(RFID2_SS_PIN, RFID2_RST_PIN);  // REMOVE reader
+WiFiClient wifiClient;
+PubSubClient mqtt(wifiClient);
+
+char topicAdd[48], topicRemove[48];
+
+String lastUid1 = "", lastUid2 = "";
+unsigned long lastTime1 = 0, lastTime2 = 0;
+
+void connectWiFi() {
+  Serial.print("WiFi connecting to ");
+  Serial.println(WIFI_SSID);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.print("\nWiFi OK, IP: ");
+  Serial.println(WiFi.localIP());
+}
+
+void ensureConnections() {
+  static unsigned long lastWifiTry = 0, lastMqttTry = 0;
+
+  if (WiFi.status() != WL_CONNECTED) {
+    digitalWrite(LED_PIN, LOW);
+    if (millis() - lastWifiTry > 5000) {
+      lastWifiTry = millis();
+      Serial.println("WiFi lost, reconnecting...");
+      WiFi.reconnect();
+    }
+    return;
+  }
+
+  if (!mqtt.connected()) {
+    digitalWrite(LED_PIN, LOW);
+    if (millis() - lastMqttTry > 3000) {
+      lastMqttTry = millis();
+      Serial.print("MQTT connecting... ");
+      String clientId = String("rfid-") + CART_ID;
+      if (mqtt.connect(clientId.c_str())) {
+        Serial.println("OK");
+      } else {
+        Serial.print("failed, rc=");
+        Serial.println(mqtt.state());
+      }
+    }
+    return;
+  }
+
+  digitalWrite(LED_PIN, HIGH);
+}
+
+void blinkLed() {
+  digitalWrite(LED_PIN, LOW);
+  delay(80);
+  digitalWrite(LED_PIN, HIGH);
+}
+
+// Read the product text stored on an NTAG sticker (written with tag_writer.ino)
+String readTagData(MFRC522 &r) {
+  String out = "";
+  byte buffer[18];
+  for (int p = 0; p < 12; p += 4) {              // pages 4..15 (48 bytes)
+    byte size = sizeof(buffer);
+    if (r.MIFARE_Read(4 + p, buffer, &size) != MFRC522::STATUS_OK) return "";
+    for (int i = 0; i < 16; i++) {
+      if (buffer[i] == 0) return out.startsWith("SC|") ? out : "";
+      char c = (char)buffer[i];
+      if (c == '"' || c == '\\') c = '\'';       // keep the JSON message valid
+      out += c;
+    }
+  }
+  return out.startsWith("SC|") ? out : "";
+}
+
+void readReader(MFRC522 &reader, const char* topic, bool sendData, String &lastUid, unsigned long &lastTime, const char* label) {
+  if (!reader.PICC_IsNewCardPresent() || !reader.PICC_ReadCardSerial()) return;
+
+  String uid = "";
+  for (byte i = 0; i < reader.uid.size; i++) {
+    if (reader.uid.uidByte[i] < 0x10) uid += "0";
+    uid += String(reader.uid.uidByte[i], HEX);
+  }
+  uid.toUpperCase();
+
+  String tagData = "";
+  if (sendData && reader.PICC_GetType(reader.uid.sak) == MFRC522::PICC_TYPE_MIFARE_UL) {
+    tagData = readTagData(reader);
+  }
+
+  reader.PICC_HaltA();
+  reader.PCD_StopCrypto1();
+
+  if (uid == lastUid && millis() - lastTime < UID_COOLDOWN_MS) return;
+  lastUid = uid;
+  lastTime = millis();
+
+  Serial.println(String(label) + " reader: " + uid);
+
+  char msg[160];
+  if (tagData.length() > 0) {
+    Serial.println("   data: " + tagData);
+    snprintf(msg, sizeof(msg), "{\"tagId\":\"%s\",\"data\":\"%s\"}", uid.c_str(), tagData.c_str());
+  } else {
+    if (sendData) Serial.println("   (no product data on this sticker)");
+    snprintf(msg, sizeof(msg), "{\"tagId\":\"%s\"}", uid.c_str());
+  }
+
+  if (mqtt.connected()) {
+    mqtt.publish(topic, msg);
+    blinkLed();
+  } else {
+    Serial.println("   MQTT down - scan was NOT sent");
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  delay(500);
+  Serial.println("\n=== Smart Cart RFID (no load cell) ===");
+
+  snprintf(topicAdd, sizeof(topicAdd), "cart/%s/rfid_scan", CART_ID);
+  snprintf(topicRemove, sizeof(topicRemove), "cart/%s/rfid_remove", CART_ID);
+
+  SPI.begin();
+  rfid1.PCD_Init();
+  rfid2.PCD_Init();
+  Serial.print("ADD reader    - ");
+  rfid1.PCD_DumpVersionToSerial();    // expect Version: 0x91 or 0x92
+  Serial.print("REMOVE reader - ");
+  rfid2.PCD_DumpVersionToSerial();    // 0x00 / 0xFF = wiring problem
+
+  WiFi.mode(WIFI_STA);
+  connectWiFi();
+  mqtt.setServer(MQTT_HOST, MQTT_PORT);
+}
+
+void loop() {
+  ensureConnections();
+  mqtt.loop();
+  readReader(rfid1, topicAdd,    true,  lastUid1, lastTime1, "ADD");
+  readReader(rfid2, topicRemove, false, lastUid2, lastTime2, "REMOVE");
+}
