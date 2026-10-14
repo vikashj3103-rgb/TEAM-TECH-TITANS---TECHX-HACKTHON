@@ -1,0 +1,273 @@
+#include "BluetoothSerial.h"
+
+BluetoothSerial SerialBT;
+
+// L298N Motor A
+#define ENA 25
+#define IN1 26
+#define IN2 27
+
+// L298N Motor B
+#define ENB 32
+#define IN3 16
+#define IN4 17
+
+// Front ultrasonic sensor
+#define FRONT_TRIG 5
+#define FRONT_ECHO 18
+
+// Left ultrasonic sensor
+#define LEFT_TRIG 19
+#define LEFT_ECHO 23
+
+// Right ultrasonic sensor
+#define RIGHT_TRIG 13
+#define RIGHT_ECHO 14
+
+// Obstacle thresholds in centimeters
+const int FRONT_LIMIT = 30;
+const int LEFT_LIMIT = 20;
+const int RIGHT_LIMIT = 20;
+
+// Low motor speed settings
+const int START_SPEED = 90;
+const int MAX_SPEED = 130;
+
+const unsigned long COMMAND_TIMEOUT = 1000;
+
+char currentCommand = 'S';
+int motorSpeed = START_SPEED;
+unsigned long lastCommandTime = 0;
+
+// Read distance from HC-SR04
+long getDistance(int trigPin, int echoPin) {
+  digitalWrite(trigPin, LOW);
+  delayMicroseconds(3);
+
+  digitalWrite(trigPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin, LOW);
+
+  unsigned long duration = pulseIn(echoPin, HIGH, 25000);
+
+  if (duration == 0) {
+    return -1;
+  }
+
+  return duration * 0.0343 / 2;
+}
+
+// Stop both motors
+void stopMotors() {
+  analogWrite(ENA, 0);
+  analogWrite(ENB, 0);
+
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+}
+
+// Move forward
+void moveForward(int speedValue) {
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+
+  analogWrite(ENA, speedValue);
+  analogWrite(ENB, speedValue);
+}
+
+// Move backward
+void moveBackward(int speedValue) {
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, HIGH);
+
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, HIGH);
+
+  analogWrite(ENA, speedValue);
+  analogWrite(ENB, speedValue);
+}
+
+// Turn left using motor B
+void turnLeft(int speedValue) {
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+
+  digitalWrite(IN3, HIGH);
+  digitalWrite(IN4, LOW);
+
+  analogWrite(ENA, 0);
+  analogWrite(ENB, speedValue);
+}
+
+// Turn right using motor A
+void turnRight(int speedValue) {
+  digitalWrite(IN1, HIGH);
+  digitalWrite(IN2, LOW);
+
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
+
+  analogWrite(ENA, speedValue);
+  analogWrite(ENB, 0);
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(ENA, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+
+  pinMode(ENB, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
+
+  pinMode(FRONT_TRIG, OUTPUT);
+  pinMode(FRONT_ECHO, INPUT);
+
+  pinMode(LEFT_TRIG, OUTPUT);
+  pinMode(LEFT_ECHO, INPUT);
+
+  pinMode(RIGHT_TRIG, OUTPUT);
+  pinMode(RIGHT_ECHO, INPUT);
+
+  digitalWrite(FRONT_TRIG, LOW);
+  digitalWrite(LEFT_TRIG, LOW);
+  digitalWrite(RIGHT_TRIG, LOW);
+
+  stopMotors();
+
+  SerialBT.begin("FollowCar");
+  SerialBT.setTimeout(50);
+
+  Serial.println("FollowCar ready");
+  Serial.println("Front limit: 30 cm");
+  Serial.println("Left limit: 20 cm");
+  Serial.println("Right limit: 20 cm");
+}
+
+void loop() {
+  // Read Bluetooth commands: F,90 / B,90 / L,90 / R,90 / S,0
+  while (SerialBT.available()) {
+    String command = SerialBT.readStringUntil('\n');
+    command.trim();
+
+    if (command.length() == 0) {
+      continue;
+    }
+
+    char action = toupper(command.charAt(0));
+    int comma = command.indexOf(',');
+    int requestedSpeed = START_SPEED;
+
+    if (comma >= 0) {
+      requestedSpeed = command.substring(comma + 1).toInt();
+    }
+
+    if (action == 'S') {
+      currentCommand = 'S';
+      motorSpeed = 0;
+    } else if (action == 'F' || action == 'B' ||
+               action == 'L' || action == 'R') {
+      currentCommand = action;
+      motorSpeed = constrain(requestedSpeed, 0, MAX_SPEED);
+    } else {
+      continue;
+    }
+
+    lastCommandTime = millis();
+
+    Serial.print("Command: ");
+    Serial.print(currentCommand);
+    Serial.print(" Speed: ");
+    Serial.println(motorSpeed);
+  }
+
+  // Stop if Bluetooth commands stop arriving
+  if (millis() - lastCommandTime > COMMAND_TIMEOUT) {
+    currentCommand = 'S';
+  }
+
+  // Read sensors separately to reduce cross-talk
+  long front = getDistance(FRONT_TRIG, FRONT_ECHO);
+  delay(30);
+
+  long left = getDistance(LEFT_TRIG, LEFT_ECHO);
+  delay(30);
+
+  long right = getDistance(RIGHT_TRIG, RIGHT_ECHO);
+  delay(30);
+
+  // Print readings to Serial Monitor
+  Serial.print("Front: ");
+  Serial.print(front);
+  Serial.print(" cm | Left: ");
+  Serial.print(left);
+  Serial.print(" cm | Right: ");
+  Serial.print(right);
+  Serial.print(" cm | Command: ");
+  Serial.println(currentCommand);
+
+  bool obstacle = false;
+
+  // Fail-safe: stop if the sensor in the direction
+  // of movement is invalid or detects an obstacle.
+  if (currentCommand == 'F' &&
+      (front < 0 || front <= FRONT_LIMIT)) {
+    obstacle = true;
+  }
+
+  if (currentCommand == 'B' &&
+      (front < 0 || front <= FRONT_LIMIT)) {
+    // Front sensor cannot verify the rear.
+    // Stop rather than reverse blindly.
+    obstacle = true;
+  }
+
+  if (currentCommand == 'L' &&
+      (left < 0 || left <= LEFT_LIMIT)) {
+    obstacle = true;
+  }
+
+  if (currentCommand == 'R' &&
+      (right < 0 || right <= RIGHT_LIMIT)) {
+    obstacle = true;
+  }
+
+  if (obstacle) {
+    stopMotors();
+    Serial.println("STOP: obstacle or sensor error");
+    delay(30);
+    return;
+  }
+
+  // Motor control
+  switch (currentCommand) {
+    case 'F':
+      moveForward(motorSpeed);
+      break;
+
+    case 'B':
+      moveBackward(motorSpeed);
+      break;
+
+    case 'L':
+      turnLeft(motorSpeed);
+      break;
+
+    case 'R':
+      turnRight(motorSpeed);
+      break;
+
+    default:
+      stopMotors();
+      break;
+  }
+
+  delay(20);
+}
