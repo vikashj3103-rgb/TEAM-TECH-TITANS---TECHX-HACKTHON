@@ -3,96 +3,69 @@
 **Team:** Team Tech Titans  
 **Event:** IEEE CS SYP TechX'26 Hackathon
 
-## 1. Overview
+## Overview
+SmartCart is a prototype concept for reducing checkout friction using RFID product identification, QR-based cart pairing, live billing interfaces, and a motorized cart controller. The current public repository includes Arduino firmware sketches and project notes. The complete web/backend application is **not currently included in this repository**, so its integration cannot be reproduced from this repository alone.
 
-SmartCart is a smart shopping cart project designed to improve the retail shopping experience by reducing manual checkout effort and enabling digital billing. The system combines RFID-based product identification, QR-based customer-cart pairing, live bill updates, and a planned autonomous cart-following system.
+## Current repository contents
+- `firmware/autonomous-movement/autonomous-movement.ino` — Bluetooth-commanded ESP32 motor controller with three ultrasonic sensors and a command timeout.
+- `firmware/rfid-billing/rfid-billing.ino` — ESP32 firmware for two MFRC522 readers publishing add/remove events over MQTT.
+- `CODE FOR AUTONOMOUS MOVEMENT.txt` — original motor-controller source retained for reference.
+- `SMART BILLING SYSTEM.txt` — original RFID source retained for reference.
+- `SMART CART CODINGS.txt` — original combined source retained for reference; it contains two sketches and should **not** be compiled as one Arduino sketch.
+- `README.md` — project documentation and setup notes.
 
-## 2. Problem Statement
+## Architecture (intended)
+1. **RFID reader(s):** identify product tags and publish events.
+2. **MQTT broker:** carries cart RFID messages to the application.
+3. **Backend and web UI:** intended to maintain cart state, calculate the bill, pair a customer by QR code, and show updates on phone/tablet. These application files are not included here yet.
+4. **Motor controller:** receives Bluetooth commands and uses ultrasonic sensors to stop for detected obstacles.
 
-Traditional shopping often requires customers to wait in checkout queues while products are scanned and bills are generated. SmartCart aims to streamline this process through automated product identification and real-time billing.
+## RFID firmware setup
+1. Install Arduino IDE and the ESP32 board package.
+2. Install these libraries using Library Manager:
+   - **MFRC522** (GithubCommunity)
+   - **PubSubClient** (Nick O'Leary)
+3. Open `firmware/rfid-billing/rfid-billing.ino` as its own sketch.
+4. In the sketch, set `WIFI_SSID`, `WIFI_PASS`, and `MQTT_HOST` for your local test network. Use a **2.4 GHz Wi-Fi network**. The MQTT host should be the LAN IP of the machine running the broker, not the text `lap ip`.
+5. Start an MQTT broker on the same reachable network and ensure TCP port 1883 is allowed for your test environment.
+6. Select the correct ESP32 board and COM port, upload, then open Serial Monitor at **115200 baud**.
+7. Confirm both readers report a valid MFRC522 version and that MQTT connects before testing tags.
 
-## 3. Proposed Solution
+The firmware publishes:
+- `cart/CART01/rfid_scan` for the ADD reader.
+- `cart/CART01/rfid_remove` for the REMOVE reader.
 
-SmartCart connects a shopping cart with a customer-facing interface. The customer can pair with the cart using a QR code, view scanned products, and monitor the bill. The proposed hardware system uses RFID and sensors to support product tracking and cart operation.
+The ADD reader expects product text in the form `SC|name|price|quantity|expiry` on a compatible NTAG sticker. Verify that this payload format matches the backend before integration.
 
-## 4. Key Features
+**Network security:** Never commit real Wi-Fi passwords, broker credentials, API keys, or private tokens. The placeholders in this public sketch must be configured locally and must not be replaced with actual secrets in a public commit.
 
-- QR-based customer and cart pairing.
-- RFID-based product identification.
-- Live bill and cart-status updates.
-- Web-based customer interface and monitoring dashboard.
-- MQTT-based communication for connected components.
-- Proposed motorized cart-following functionality.
-- Safety features planned for autonomous movement, including obstacle detection and emergency stop.
+## Motor firmware setup
+1. Open `firmware/autonomous-movement/autonomous-movement.ino` as a separate Arduino sketch.
+2. Select the ESP32 board and the correct port, then upload.
+3. Pair a phone or test controller with Bluetooth device `FollowCar`.
+4. Send newline-terminated commands: `F,90`, `B,90`, `L,90`, `R,90`, or `S,0`.
+5. Test with the wheels lifted and motor power limited before any floor test.
 
-**Note:** Features must be demonstrated and verified before being described as fully implemented.
+This is **Bluetooth-commanded movement, not person-following AI**. The code stops on a front-sensor obstacle when reversing because it has no rear sensor. It does not demonstrate a physical emergency-stop switch. Add and validate appropriate independent safety hardware before carrying a person-facing cart in a public area.
 
-## 5. System Architecture
+## Safety and limitations
+- Ultrasonic sensors can miss soft, angled, narrow, or moving objects. Never rely on this prototype as the only safety mechanism.
+- Bench-test with wheels raised, use low speed, keep hands clear of motors, and have a physical power cutoff accessible during tests.
+- Do not claim autonomous person-following, production-grade checkout, or end-to-end phone/tablet integration until these are implemented and demonstrated.
+- RFID events are not buffered when MQTT is disconnected; a scan may be lost.
+- Two MFRC522 readers share SPI. Validate chip-select wiring and reader behavior on the actual hardware.
+- The complete backend/frontend and QR pairing flow must be added to this repository to make the full software stack reproducible.
 
-The proposed system consists of:
+## Suggested validation checklist
+- [ ] Firmware compiles independently in Arduino IDE.
+- [ ] Both RFID readers are detected reliably.
+- [ ] ADD and REMOVE events reach the expected MQTT topics.
+- [ ] Backend consumes the event format and updates the cart correctly.
+- [ ] Duplicate scans, invalid tags, and MQTT disconnects are tested.
+- [ ] Motor timeout stops the motors when commands stop.
+- [ ] Obstacle response is tested at low speed in a controlled area.
+- [ ] A separate physical emergency stop / power cutoff is installed and tested.
+- [ ] QR pairing and customer phone/tablet views are demonstrated end to end.
 
-1. **Customer interface:** Displays cart information, scanned products, and the bill.
-2. **Backend server:** Coordinates application requests and cart-related data.
-3. **Communication layer:** Uses MQTT and Socket.IO where configured.
-4. **RFID and sensor hardware:** Supports product identification and sensor readings.
-5. **Motor controller:** Intended to manage cart movement.
-6. **Monitoring dashboard:** Provides a view of cart and system status.
-
-## 6. Technology Stack
-
-- **Frontend:** HTML, CSS, JavaScript.
-- **Backend:** Node.js and Express.
-- **Real-time communication:** MQTT and Socket.IO.
-- **Data storage:** JSON-file storage in the current prototype.
-- **Hardware platform:** ESP32-based controllers, RFID reader, and sensors, as applicable to the implemented build.
-
-## 7. Project Structure
-
-The repository contains the source code and supporting files for the implemented SmartCart components. Refer to the folders and configuration files in this repository for the exact project structure.
-
-## 8. Setup and Execution
-
-1. Install Node.js and npm.
-2. Open the backend project directory in a terminal.
-3. Install the dependencies listed in `package.json` using `npm install`.
-4. Configure the required environment variables and communication settings using a local configuration file.
-5. Start the backend using the command specified in the project's `package.json` or setup instructions.
-6. Start any required MQTT broker and hardware components.
-7. Open the relevant frontend page and verify connectivity.
-
-The exact commands and configuration depend on the files included in this repository. Never commit passwords, API keys, or private credentials.
-
-## 9. Testing and Validation
-
-Testing should cover:
-
-- Backend startup and API responses.
-- Customer-cart QR pairing.
-- RFID product detection and duplicate-scan handling.
-- Correct bill calculation and item removal.
-- Real-time communication and recovery after disconnection.
-- Hardware operation and emergency-stop behavior, where implemented.
-- Customer interface responsiveness on a phone.
-
-Only report tests as passed when they have actually been performed.
-
-## 10. Current Limitations
-
-- Hardware integration and end-to-end testing may require further validation.
-- QR pairing and live billing should be verified using the actual customer device.
-- Autonomous following and safety mechanisms must be demonstrated on the physical cart before being claimed as operational.
-- JSON-file storage may require a more robust database solution for larger deployments.
-
-## 11. Future Enhancements
-
-- Reliable offline operation and connection recovery.
-- Improved inventory and billing validation.
-- More robust data storage and multi-cart support.
-- Enhanced autonomous navigation and obstacle avoidance.
-- Comprehensive hardware and security testing.
-
-## 12. Team
-
+## Team
 **Team Tech Titans — IEEE CS SYP TechX'26 Hackathon**
-
-This repository contains the SmartCart project source code and documentation for technical review.
